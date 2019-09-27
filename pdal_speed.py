@@ -5,9 +5,13 @@ from shapely.geometry import Polygon
 import json
 import pdal
 from joblib import Parallel, delayed
+import time
 
-las_files = [os.path.join('data/las', path) for path in os.listdir('data/las')]
+las_files = [os.path.join('data/las', path) for path in os.listdir('data/las') if path.endswith('.las')]
 print(las_files)
+
+
+
 
 def get_project_bbox(las_files):
     xs = []
@@ -79,13 +83,15 @@ def retile_raster(bbox, target_cell_size, target_tile_size, buffer = 0):
     return new_tiles
 
 
+
+                                                          
+
 def generate_pipelines(tiles, ept_path):
     pipelines = []
     for tile in tiles:
         coords = tile.exterior.coords
         bbox = min_x, max_x, min_y, max_y = coords[0][0], coords[2][0], coords[0][1], coords[1][1]
         bound_str = "([{}, {}], [{}, {}])".format(min_x, max_x, min_y, max_y)
-        print(bound_str)
 
         flat_coords = [int(np.floor(coord)) for coord in bbox]
         out_str = '{}_{}_{}_{}'.format(*flat_coords)
@@ -97,8 +103,21 @@ def generate_pipelines(tiles, ept_path):
             "bounds": bound_str
             },
             {
-                "type": "writers.las",
-                "filename": "data\\out\\" + out_str + ".las" # not sure if correct...
+                "type": "filters.hag"
+            },
+            {
+                "type": "filters.ferry",
+                "dimensions":"HeightAboveGround=Z"
+            },
+            {
+                "type": "filters.python",
+                "script": "process.py",
+                "module": "process",
+                "function": "my_py_filter",
+                "pdalargs": {
+                        "bbox": out_str,
+                        "crs": "+proj=utm +zone=10 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+                    }
             }
         ]
 
@@ -112,17 +131,14 @@ def execute_pipeline(pipeline):
     print("Executing pipeline at {}".format(pipeline))
     pipeline = pdal.Pipeline(pipeline)
     pipeline.validate()
-    pipeline.execute()
+    try:
+        pipeline.execute()
+    except RuntimeError:
+        pass
 
 
-import time
 tiles = retile_raster(get_project_bbox(las_files), 17, 300, buffer=17)
 pipelines = generate_pipelines(tiles, "data/entwine/ept.json")
-
-start = time.time()
 Parallel(n_jobs=6)(delayed(execute_pipeline)(pipeline) for pipeline in pipelines)
-end = time.time()
-
-print(end - start)
 
 
